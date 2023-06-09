@@ -65,7 +65,7 @@ public class ReviewController {
                         .content(review.getContent())
                         .image(review.getImage())
                         .build())
-                .map(ApiResult::ok);
+                .map(ApiResult::created);
     }
 
     // 리뷰 수정
