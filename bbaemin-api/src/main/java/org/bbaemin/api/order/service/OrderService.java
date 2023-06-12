@@ -11,11 +11,16 @@ import org.bbaemin.api.user.vo.User;
 import org.bbaemin.api.order.repository.OrderItemRepository;
 import org.bbaemin.api.order.repository.OrderRepository;
 import org.bbaemin.api.order.vo.OrderItem;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriBuilder;
 
+import java.net.URI;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Transactional(readOnly = true)
@@ -29,6 +34,8 @@ public class OrderService {
     private final DeliveryFeeService deliveryFeeService;
     private final UserService userService;
     private final CouponService couponService;
+
+    private final RestTemplate restTemplate;
 
     public List<Order> getOrderListByUserId(Long userId) {
         User user = userService.getUser(userId);
@@ -47,6 +54,99 @@ public class OrderService {
     public OrderItem getOrderItem(Long orderItemId) {
         return orderItemRepository.findById(orderItemId)
                 .orElseThrow(() -> new NoSuchElementException("orderItemId : " + orderItemId));
+    }
+
+    private ResponseEntity<T> get(Function<UriBuilder, URI> uriFunction, ParameterizedTypeReference<T> responseType) {
+        restTemplate.exchange(uriFunction.)
+        return client.get()
+                .uri(uriFunction)
+                .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .bodyToMono(responseType)
+                .doOnError(Mono::error);
+    }
+
+    private <T> Mono<T> post(Function<UriBuilder, URI> uriFunction, Object bodyValue, ParameterizedTypeReference<T> responseType) {
+        return client.post()
+                .uri(uriFunction)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(bodyValue)
+                .retrieve()
+                .bodyToMono(responseType)
+                .doOnError(Mono::error);
+    }
+
+    private <T> Mono<T> patch(Function<UriBuilder, URI> uriFunction, Object bodyValue, ParameterizedTypeReference<T> responseType) {
+        return client.patch()
+                .uri(uriFunction)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(bodyValue)
+                .retrieve()
+                .bodyToMono(responseType)
+                .doOnError(Mono::error);
+    }
+
+    // 장바구니 조회
+    Mono<ApiResult<CartResponse>> getCart(Long userId) {
+        return get(
+                (uriBuilder) -> uriBuilder.path(user).path(CART_SERVICE.getPath()).queryParam("userId", userId).build(),
+                new ParameterizedTypeReference<>() {});
+    }
+
+    // 재고 조회 및 재고 차감 처리
+    Mono<ApiResult<ItemResponse>> deductItem(Long itemId, int orderCount) {
+        return patch(
+                (uriBuilder) -> uriBuilder.path(admin).path(ITEM_SERVICE.getPath()).path("/{itemId}/deduct").build(itemId),
+                new DeductItemRequest(itemId, orderCount),
+                new ParameterizedTypeReference<>() {});
+    }
+
+    // 재고 복구
+    Mono<ApiResult<ItemResponse>> restoreItem(Long itemId, int orderCount) {
+        return patch(
+                (uriBuilder) -> uriBuilder.path(admin).path(ITEM_SERVICE.getPath()).path("/{itemId}/restore").build(itemId),
+                new RestoreItemRequest(itemId, orderCount),
+                new ParameterizedTypeReference<>() {});
+    }
+
+    // 결제
+    Mono<ApiResult<PaymentResponse>> pay(Long providerId, Integer amount, String referenceNumber, String account) {
+        return post(
+                (uriBuilder) -> uriBuilder.path(admin).path(PAYMENT_SERVICE.getPath()).path("/process").build(),
+                new PayRequest(providerId, amount, referenceNumber, account),
+                new ParameterizedTypeReference<>() {});
+    }
+
+    // 결제 취소
+    Mono<ApiResult<PaymentResponse>> cancelPay(Long orderId) {
+        return post(
+                (uriBuilder) -> uriBuilder.path(admin).path(PAYMENT_SERVICE.getPath()).path("/cancel").build(),
+                new CancelPayRequest(orderId),
+                new ParameterizedTypeReference<>() {});
+    }
+
+    // 쿠폰 적용
+    Mono<ApiResult<Integer>> applyCouponList(int orderAmount, List<Long> discountCouponIdList) {
+        return patch(
+                (uriBuilder) -> uriBuilder.path(admin).path(COUPON_SERVICE.getPath()).path("/apply").build(),
+                new ApplyCouponRequest(orderAmount, discountCouponIdList),
+                new ParameterizedTypeReference<>() {});
+    }
+
+    // 이메일 전송
+    Mono<ApiResult<Void>> sendEmail(String userEmail, String content) {
+        return post(
+                (uriBuilder) -> uriBuilder.path(admin).path(EMAIL_SERVICE.getPath()).path("/send").build(),
+                new SendEmailRequest(userEmail, content),
+                new ParameterizedTypeReference<>() {});
+    }
+
+    // 배달 정보 전송
+    Mono<ApiResult<Void>> sendDeliveryInfo(String deliveryAddress, Long orderId) {
+        return post(
+                (uriBuilder) -> uriBuilder.path(admin).path(DELIVERY_SERVICE.getPath()).path("/send").build(),
+                new SendDeliveryInfoRequest(deliveryAddress, orderId),
+                new ParameterizedTypeReference<>() {});
     }
 
     @Transactional
@@ -83,6 +183,107 @@ public class OrderService {
 
         cartItemService.clear(userId);
         return saved;
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // #1. 장바구니 조회 (CartService와 분리되어 있다고 가정)
+        Flux<CartItemResponse> cartItemFlux = this.getCart(userId)
+                .map(ApiResult::getResult)
+                .flatMap(cart -> Mono.just(cart.getCartItemList()))
+                .flatMapMany(Flux::fromIterable);
+
+        return cartItemFlux
+                // #2. 재고 조회 및 재고 차감 처리
+                // -> 재고 부족 시 주문 불가 처리
+                .doOnNext(cartItem -> {
+                    this.deductItem(cartItem.getItemId(), cartItem.getOrderCount())
+                            .doOnError(error -> {
+                                // throw new OrderException(error);
+                                this.sendEmail(order.getEmail(), "ORDER FAIL - ITEM FAIL");
+                            });
+                })
+                .doOnComplete(() -> {
+
+                    // #3. 금액 조회
+                    // #3-1. 주문금액
+                    Mono<Integer> orderAmount = cartItemFlux
+                            .map(cartItem -> cartItem.getOrderPrice() * cartItem.getOrderCount())
+                            .reduce(Integer::sum);
+
+                    // #3-2. 배달비 조회
+                    Mono<Integer> deliveryFee = orderAmount
+                            .flatMap(_orderAmount -> deliveryFeeService.getDeliveryFee(_orderAmount).map(ApiResult::getResult));
+
+                    // #3-3. 쿠폰 적용(할인금액 조회)
+                    Mono<Integer> totalDiscountAmount = orderAmount
+                            .flatMap(amount -> this.applyCouponList(amount, discountCouponIdList).map(ApiResult::getResult));
+
+                    // #3-4. 총 금액
+                    orderAmount
+                            .zipWith(deliveryFee, Integer::sum)
+                            .zipWith(totalDiscountAmount, (sum, discount) -> sum - discount)
+                            .doOnSuccess(paymentAmount ->
+
+                                            // #4. 결제 -> 결제 실패 시 주문 불가 처리
+                                            // TODO - 결제 데이터
+                                            this.pay(1L, paymentAmount, "referenceNumber", "account")
+                                                    .doOnError(throwable -> {
+//                                                throw new OrderException(throwable);
+
+                                                        // # 5-1. 주문 실패 메일 전송
+                                                        this.sendEmail(order.getEmail(), "ORDER FAIL - PAYMENT FAIL");
+
+                                                        order.setStatus(FAIL_ORDER);
+                                                        orderRepository.save(order);
+                                                    })
+                                                    .doOnSuccess(result -> {
+
+                                                        Long paymentId = result.getResult().getPaymentId();
+
+                                                        // #5-1. (결제까지 완료 시) 주문 생성
+                                                        Mono.zip(Mono.just(order), orderAmount, deliveryFee, Mono.just(paymentAmount))
+                                                                .map(tuple -> {
+                                                                    Order o = tuple.getT1();
+                                                                    Integer _orderAmount = tuple.getT2();
+                                                                    Integer _deliveryFee = tuple.getT3();
+                                                                    Integer _paymentAmount = tuple.getT4();
+                                                                    o.setOrderAmount(_orderAmount);
+                                                                    o.setDeliveryFee(_deliveryFee);
+                                                                    o.setPaymentAmount(_paymentAmount);
+                                                                    return o;
+                                                                })
+                                                                .map(o -> {
+                                                                    o.setUserId(userId);
+                                                                    o.setPaymentId(paymentId);
+                                                                    o.setStatus(COMPLETE_ORDER);
+                                                                    return o;
+                                                                })
+                                                                .flatMap(orderRepository::save)
+                                                                .flatMapMany(o -> cartItemFlux.map(cartItem -> OrderItem.builder()
+                                                                        .orderId(o.getOrderId())
+                                                                        .itemId(cartItem.getItemId())
+                                                                        .itemName(cartItem.getItemName())
+                                                                        .itemDescription(cartItem.getItemDescription())
+                                                                        .orderPrice(cartItem.getOrderPrice())
+                                                                        .orderCount(cartItem.getOrderCount())
+                                                                        .build()))
+                                                                .doOnNext(orderItem -> {
+                                                                    order.addOrderItem(orderItem);
+                                                                    orderItemRepository.save(orderItem);
+                                                                })
+                                                                .doOnComplete(() -> {
+                                                                    cartItemService.clear(userId);
+                                                                })
+                                                                .then(
+                                                                        // # 6. 주문 성공 메일 전송
+                                                                        this.sendEmail(order.getEmail(), "ORDER SUCCESS")
+                                                                )
+                                                                .then(
+                                                                        // # 7. 배달 정보 전송
+                                                                        this.sendDeliveryInfo(order.getDeliveryAddress(), order.getOrderId())
+                                                                );
+                                                    })
+                            );
+                })
+                .then(Mono.just(order));
     }
 
     @Transactional
@@ -98,5 +299,34 @@ public class OrderService {
         Order order = getOrder(userId, orderId);
         order.setStatus(OrderStatus.CANCEL_ORDER);
         return order;
+//////////////////////////////////////////////////////////////////////////////////////
+        return getOrder(userId, orderId)
+                .doOnSuccess(order -> {
+
+                    // #1. 재고 복구
+                    List<OrderItem> orderItemList = order.getOrderItemList();
+                    Flux.fromIterable(orderItemList)
+                            .doOnNext(orderItem -> {
+                                this.restoreItem(orderItem.getItemId(), orderItem.getOrderCount());
+                            });
+
+                    // #2. 결제 취소
+                    this.cancelPay(orderId);
+
+                })
+                .map(order -> {
+                    order.setStatus(OrderStatus.CANCEL_ORDER);
+                    return order;
+                })
+                // #3. '주문 취소'로 상태 변경
+                .flatMap(orderRepository::save)
+                .doOnSuccess(order -> {
+                    // # 4. 주문 취소 메일 전송
+                    this.sendEmail(order.getEmail(), "ORDER CANCEL");
+                })
+                .doOnSuccess(order -> {
+                    // # 5. 배달 취소 정보 전송
+                    this.sendDeliveryInfo(order.getDeliveryAddress(), order.getOrderId());
+                });
     }
 }
