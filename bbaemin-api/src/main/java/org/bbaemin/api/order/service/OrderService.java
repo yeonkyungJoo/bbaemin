@@ -1,26 +1,34 @@
 package org.bbaemin.api.order.service;
 
 import lombok.RequiredArgsConstructor;
+import org.bbaemin.api.cart.controller.response.CartResponse;
 import org.bbaemin.api.cart.service.CartItemService;
 import org.bbaemin.api.cart.service.DeliveryFeeService;
 import org.bbaemin.api.cart.vo.CartItem;
+import org.bbaemin.api.item.controller.response.ItemResponse;
 import org.bbaemin.api.order.enums.OrderStatus;
-import org.bbaemin.api.order.vo.Order;
-import org.bbaemin.api.user.service.UserService;
-import org.bbaemin.api.user.vo.User;
 import org.bbaemin.api.order.repository.OrderItemRepository;
 import org.bbaemin.api.order.repository.OrderRepository;
+import org.bbaemin.api.order.vo.Order;
 import org.bbaemin.api.order.vo.OrderItem;
+import org.bbaemin.api.user.service.UserService;
+import org.bbaemin.api.user.vo.User;
+import org.bbaemin.config.response.ApiResult;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriBuilder;
+import org.springframework.web.util.DefaultUriBuilderFactory;
 
 import java.net.URI;
+import java.util.Collections;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Transactional(readOnly = true)
@@ -36,6 +44,9 @@ public class OrderService {
     private final CouponService couponService;
 
     private final RestTemplate restTemplate;
+
+    private String admin = "localhost:8080";
+    private String user = "localhost:8081";
 
     public List<Order> getOrderListByUserId(Long userId) {
         User user = userService.getUser(userId);
@@ -56,97 +67,78 @@ public class OrderService {
                 .orElseThrow(() -> new NoSuchElementException("orderItemId : " + orderItemId));
     }
 
-    private ResponseEntity<T> get(Function<UriBuilder, URI> uriFunction, ParameterizedTypeReference<T> responseType) {
-        restTemplate.exchange(uriFunction.)
-        return client.get()
-                .uri(uriFunction)
-                .accept(MediaType.APPLICATION_JSON)
-                .retrieve()
-                .bodyToMono(responseType)
-                .doOnError(Mono::error);
+    private <T> ResponseEntity<T> get(URI url, ParameterizedTypeReference<T> responseType) {
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
+
+        return restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(null, headers), responseType);
     }
 
-    private <T> Mono<T> post(Function<UriBuilder, URI> uriFunction, Object bodyValue, ParameterizedTypeReference<T> responseType) {
-        return client.post()
-                .uri(uriFunction)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(bodyValue)
-                .retrieve()
-                .bodyToMono(responseType)
-                .doOnError(Mono::error);
+    private <T> ResponseEntity<T> post(URI url, Object bodyValue, ParameterizedTypeReference<T> responseType) {
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Object> entity = new HttpEntity<>(bodyValue, headers);
+
+        return restTemplate.exchange(url, HttpMethod.POST, entity, responseType);
     }
 
-    private <T> Mono<T> patch(Function<UriBuilder, URI> uriFunction, Object bodyValue, ParameterizedTypeReference<T> responseType) {
-        return client.patch()
-                .uri(uriFunction)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(bodyValue)
-                .retrieve()
-                .bodyToMono(responseType)
-                .doOnError(Mono::error);
+    private <T> ResponseEntity<T> patch(URI url, Object bodyValue, ParameterizedTypeReference<T> responseType) {
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Object> entity = new HttpEntity<>(bodyValue, headers);
+
+        return restTemplate.exchange(url, HttpMethod.PATCH, entity, responseType);
     }
 
     // 장바구니 조회
-    Mono<ApiResult<CartResponse>> getCart(Long userId) {
-        return get(
-                (uriBuilder) -> uriBuilder.path(user).path(CART_SERVICE.getPath()).queryParam("userId", userId).build(),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<CartResponse>> getCart(Long userId) {
+        URI uri = new DefaultUriBuilderFactory(user).builder().path(CART_SERVICE.getPath()).queryParam("userId", userId).build();
+        return get(uri, new ParameterizedTypeReference<>() {});
     }
 
     // 재고 조회 및 재고 차감 처리
-    Mono<ApiResult<ItemResponse>> deductItem(Long itemId, int orderCount) {
-        return patch(
-                (uriBuilder) -> uriBuilder.path(admin).path(ITEM_SERVICE.getPath()).path("/{itemId}/deduct").build(itemId),
-                new DeductItemRequest(itemId, orderCount),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<ItemResponse>> deductItem(Long itemId, int orderCount) {
+        URI uri = new DefaultUriBuilderFactory(admin).builder().path(ITEM_SERVICE.getPath()).path("/{itemId}/deduct").build(itemId);
+        return patch(uri, new DeductItemRequest(itemId, orderCount), new ParameterizedTypeReference<>() {});
     }
 
     // 재고 복구
-    Mono<ApiResult<ItemResponse>> restoreItem(Long itemId, int orderCount) {
-        return patch(
-                (uriBuilder) -> uriBuilder.path(admin).path(ITEM_SERVICE.getPath()).path("/{itemId}/restore").build(itemId),
-                new RestoreItemRequest(itemId, orderCount),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<ItemResponse>> restoreItem(Long itemId, int orderCount) {
+        URI uri = new DefaultUriBuilderFactory(admin).builder().path(ITEM_SERVICE.getPath()).path("/{itemId}/restore").build(itemId);
+        return patch(uri, new RestoreItemRequest(itemId, orderCount), new ParameterizedTypeReference<>() {});
     }
 
     // 결제
-    Mono<ApiResult<PaymentResponse>> pay(Long providerId, Integer amount, String referenceNumber, String account) {
-        return post(
-                (uriBuilder) -> uriBuilder.path(admin).path(PAYMENT_SERVICE.getPath()).path("/process").build(),
-                new PayRequest(providerId, amount, referenceNumber, account),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<PaymentResponse>> pay(Long providerId, Integer amount, String referenceNumber, String account) {
+        URI uri = new DefaultUriBuilderFactory(admin).builder().path(PAYMENT_SERVICE.getPath()).path("/process").build();
+        return post(uri, new PayRequest(providerId, amount, referenceNumber, account), new ParameterizedTypeReference<>() {});
     }
 
     // 결제 취소
-    Mono<ApiResult<PaymentResponse>> cancelPay(Long orderId) {
-        return post(
-                (uriBuilder) -> uriBuilder.path(admin).path(PAYMENT_SERVICE.getPath()).path("/cancel").build(),
-                new CancelPayRequest(orderId),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<PaymentResponse>> cancelPay(Long orderId) {
+        URI uri = new DefaultUriBuilderFactory(admin).builder().path(PAYMENT_SERVICE.getPath()).path("/cancel").build();
+        return post(uri, new CancelPayRequest(orderId), new ParameterizedTypeReference<>() {});
     }
 
     // 쿠폰 적용
-    Mono<ApiResult<Integer>> applyCouponList(int orderAmount, List<Long> discountCouponIdList) {
-        return patch(
-                (uriBuilder) -> uriBuilder.path(admin).path(COUPON_SERVICE.getPath()).path("/apply").build(),
-                new ApplyCouponRequest(orderAmount, discountCouponIdList),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<Integer>> applyCouponList(int orderAmount, List<Long> discountCouponIdList) {
+        URI uri = new DefaultUriBuilderFactory(admin).builder().path(COUPON_SERVICE.getPath()).path("/apply").build();
+        return patch(uri, new ApplyCouponRequest(orderAmount, discountCouponIdList), new ParameterizedTypeReference<>() {});
     }
 
     // 이메일 전송
-    Mono<ApiResult<Void>> sendEmail(String userEmail, String content) {
-        return post(
-                (uriBuilder) -> uriBuilder.path(admin).path(EMAIL_SERVICE.getPath()).path("/send").build(),
-                new SendEmailRequest(userEmail, content),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<Void>> sendEmail(String userEmail, String content) {
+        URI uri = new DefaultUriBuilderFactory(admin).builder().path(EMAIL_SERVICE.getPath()).path("/send").build();
+        return post(uri, new SendEmailRequest(userEmail, content), new ParameterizedTypeReference<>() {});
     }
 
     // 배달 정보 전송
-    Mono<ApiResult<Void>> sendDeliveryInfo(String deliveryAddress, Long orderId) {
-        return post(
-                (uriBuilder) -> uriBuilder.path(admin).path(DELIVERY_SERVICE.getPath()).path("/send").build(),
-                new SendDeliveryInfoRequest(deliveryAddress, orderId),
-                new ParameterizedTypeReference<>() {});
+    ResponseEntity<ApiResult<Void>> sendDeliveryInfo(String deliveryAddress, Long orderId) {
+        URI uri = new DefaultUriBuilderFactory(admin).builder().path(DELIVERY_SERVICE.getPath()).path("/send").build();
+        return post(uri, new SendDeliveryInfoRequest(deliveryAddress, orderId), new ParameterizedTypeReference<>() {});
     }
 
     @Transactional
