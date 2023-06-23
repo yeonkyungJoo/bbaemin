@@ -1,6 +1,7 @@
 package org.bbaemin.api.order.service;
 
 import lombok.RequiredArgsConstructor;
+import org.bbaemin.api.cart.controller.response.CartItemResponse;
 import org.bbaemin.api.cart.controller.response.CartResponse;
 import org.bbaemin.api.cart.service.CartItemService;
 import org.bbaemin.api.cart.service.DeliveryFeeService;
@@ -147,9 +148,30 @@ public class OrderService {
         User user = userService.getUser(userId);
         order.setUser(user);
 
-        List<CartItem> cartItemList = cartItemService.getCartItemListByUserId(userId);
-        int orderAmount = cartItemList.stream().mapToInt(cartItem -> cartItem.getOrderPrice() * cartItem.getOrderCount()).sum();
-        int deliveryFee = deliveryFeeService.getDeliveryFee(orderAmount);
+        // #1. 장바구니 조회 (CartService와 분리되어 있다고 가정)
+//        List<CartItem> cartItemList = cartItemService.getCartItemListByUserId(userId);
+        CartResponse cart = this.getCart(userId).getBody().getResult();
+        List<CartItemResponse> cartItemList = cart.getCartItemList();
+
+        for (CartItemResponse cartItem : cartItemList) {
+            // #2. 재고 조회 및 재고 차감 처리
+            // -> 재고 부족 시 주문 불가 처리
+            ResponseEntity<ApiResult<ItemResponse>> responseEntity = this.deductItem(cartItem.getItemId(), cartItem.getOrderCount());
+            if (!responseEntity.getStatusCode().is2xxSuccessful()) {
+                // throw new OrderException(error);
+                this.sendEmail(order.getEmail(), "ORDER FAIL - ITEM FAIL");
+            }
+        }
+
+        // #3. 금액 조회
+        // #3-1. 주문금액
+        Integer orderAmount = cartItemList.stream().mapToInt(cartItem -> cartItem.getOrderPrice() * cartItem.getOrderCount()).sum();
+
+        // #3-2. 배달비 조회
+        Integer deliveryFee = deliveryFeeService.getDeliveryFee(orderAmount);
+
+        // #3-3. 쿠폰 적용(할인금액 조회)
+        Integer totalDiscountAmount = this.applyCouponList(orderAmount, discountCouponIdList).getBody().getResult();
 
         // TODO - 어떻게 테스트 하나요?
         List<OrderItem> orderItemList = cartItemList.stream()
@@ -176,37 +198,15 @@ public class OrderService {
         cartItemService.clear(userId);
         return saved;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // #1. 장바구니 조회 (CartService와 분리되어 있다고 가정)
-        Flux<CartItemResponse> cartItemFlux = this.getCart(userId)
-                .map(ApiResult::getResult)
-                .flatMap(cart -> Mono.just(cart.getCartItemList()))
-                .flatMapMany(Flux::fromIterable);
 
-        return cartItemFlux
-                // #2. 재고 조회 및 재고 차감 처리
-                // -> 재고 부족 시 주문 불가 처리
-                .doOnNext(cartItem -> {
-                    this.deductItem(cartItem.getItemId(), cartItem.getOrderCount())
-                            .doOnError(error -> {
-                                // throw new OrderException(error);
-                                this.sendEmail(order.getEmail(), "ORDER FAIL - ITEM FAIL");
-                            });
-                })
+
                 .doOnComplete(() -> {
 
-                    // #3. 금액 조회
-                    // #3-1. 주문금액
-                    Mono<Integer> orderAmount = cartItemFlux
-                            .map(cartItem -> cartItem.getOrderPrice() * cartItem.getOrderCount())
-                            .reduce(Integer::sum);
 
-                    // #3-2. 배달비 조회
-                    Mono<Integer> deliveryFee = orderAmount
-                            .flatMap(_orderAmount -> deliveryFeeService.getDeliveryFee(_orderAmount).map(ApiResult::getResult));
 
-                    // #3-3. 쿠폰 적용(할인금액 조회)
-                    Mono<Integer> totalDiscountAmount = orderAmount
-                            .flatMap(amount -> this.applyCouponList(amount, discountCouponIdList).map(ApiResult::getResult));
+
+
+
 
                     // #3-4. 총 금액
                     orderAmount

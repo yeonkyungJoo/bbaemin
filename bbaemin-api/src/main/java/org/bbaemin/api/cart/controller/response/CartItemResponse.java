@@ -1,32 +1,31 @@
 package org.bbaemin.api.cart.controller.response;
 
+import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
-import org.bbaemin.api.cart.vo.CartItem;
 
 @ToString
 @Getter
 public class CartItemResponse {
 
+    private Long itemId;
     private String itemName;
     private String itemDescription;
-
     private int orderPrice;
-
     private int orderCount;
-
     private int totalOrderPrice;
 
-    public CartItemResponse(CartItem cartItem) {
-        this.itemName = cartItem.getItemName();
-        this.itemDescription = cartItem.getItemDescription();
-        this.orderPrice = cartItem.getOrderPrice();
-        this.orderCount = cartItem.getOrderCount();
-        this.totalOrderPrice = cartItem.getOrderPrice() * cartItem.getOrderCount();
+    @Builder
+    private CartItemResponse(Long itemId, String itemName, String itemDescription, int orderPrice, int orderCount) {
+        this.itemId = itemId;
+        this.itemName = itemName;
+        this.itemDescription = itemDescription;
+        this.orderPrice = orderPrice;
+        this.orderCount = orderCount;
+        this.totalOrderPrice = orderPrice * orderCount;
     }
 
     public int getTotalOrderPrice() {
         return this.totalOrderPrice;
     }
-
 }
