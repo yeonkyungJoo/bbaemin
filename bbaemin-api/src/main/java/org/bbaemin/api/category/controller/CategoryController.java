@@ -6,7 +6,7 @@ import org.bbaemin.api.category.service.CategoryService;
 import org.bbaemin.api.category.controller.request.CreateCategoryRequest;
 import org.bbaemin.api.category.controller.response.CategoryResponse;
 import org.bbaemin.api.category.vo.Category;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 

@@ -8,7 +8,7 @@ import org.bbaemin.api.cart.controller.response.CartItemResponse;
 import org.bbaemin.api.cart.service.CartItemService;
 import org.bbaemin.api.cart.service.DeliveryFeeService;
 import org.bbaemin.api.cart.vo.CartItem;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;

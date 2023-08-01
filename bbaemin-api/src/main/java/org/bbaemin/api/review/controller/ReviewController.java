@@ -3,7 +3,7 @@ package org.bbaemin.api.review.controller;
 import lombok.RequiredArgsConstructor;
 import org.bbaemin.api.review.service.ReviewService;
 import org.bbaemin.api.review.vo.Review;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.bbaemin.api.review.controller.request.CreateReviewRequest;
 import org.bbaemin.api.review.controller.request.UpdateReviewRequest;
 import org.bbaemin.api.review.controller.response.ReviewResponse;

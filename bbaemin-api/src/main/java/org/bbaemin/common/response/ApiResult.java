@@ -1,12 +1,12 @@
-package org.bbaemin.config.response;
+package org.bbaemin.common.response;
 
 
 import lombok.Getter;
 import org.springframework.http.HttpStatus;
 
-import static org.bbaemin.config.response.ApiResult.ResultCode.CREATED;
-import static org.bbaemin.config.response.ApiResult.ResultCode.FAIL;
-import static org.bbaemin.config.response.ApiResult.ResultCode.SUCCESS;
+import static org.bbaemin.common.response.ApiResult.ResultCode.CREATED;
+import static org.bbaemin.common.response.ApiResult.ResultCode.FAIL;
+import static org.bbaemin.common.response.ApiResult.ResultCode.SUCCESS;
 
 @Getter
 public class ApiResult<T> {

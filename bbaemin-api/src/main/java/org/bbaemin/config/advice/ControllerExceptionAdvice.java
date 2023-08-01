@@ -1,6 +1,6 @@
 package org.bbaemin.config.advice;
 
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;

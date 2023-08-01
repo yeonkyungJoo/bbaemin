@@ -3,7 +3,7 @@ package org.bbaemin.api.order.controller;
 import lombok.RequiredArgsConstructor;
 import org.bbaemin.api.order.controller.request.CreateOrderRequest;
 import org.bbaemin.api.order.controller.response.OrderResponse;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.bbaemin.api.order.controller.response.OrderSummaryResponse;
 import org.bbaemin.api.order.service.OrderService;
 import org.bbaemin.api.order.vo.Order;

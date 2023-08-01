@@ -5,7 +5,6 @@ import org.bbaemin.api.cart.controller.response.CartItemResponse;
 import org.bbaemin.api.cart.controller.response.CartResponse;
 import org.bbaemin.api.cart.service.CartItemService;
 import org.bbaemin.api.cart.service.DeliveryFeeService;
-import org.bbaemin.api.cart.vo.CartItem;
 import org.bbaemin.api.item.controller.response.ItemResponse;
 import org.bbaemin.api.order.enums.OrderStatus;
 import org.bbaemin.api.order.repository.OrderItemRepository;
@@ -14,7 +13,7 @@ import org.bbaemin.api.order.vo.Order;
 import org.bbaemin.api.order.vo.OrderItem;
 import org.bbaemin.api.user.service.UserService;
 import org.bbaemin.api.user.vo.User;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -30,12 +29,24 @@ import java.net.URI;
 import java.util.Collections;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.stream.Collectors;
+import java.util.Objects;
+
+import static org.bbaemin.api.order.enums.OrderStatus.COMPLETE_ORDER;
+import static org.bbaemin.api.order.enums.OrderStatus.FAIL_ORDER;
+import static org.bbaemin.common.enums.ServicePath.CART_SERVICE;
+import static org.bbaemin.common.enums.ServicePath.COUPON_SERVICE;
+import static org.bbaemin.common.enums.ServicePath.DELIVERY_SERVICE;
+import static org.bbaemin.common.enums.ServicePath.EMAIL_SERVICE;
+import static org.bbaemin.common.enums.ServicePath.ITEM_SERVICE;
+import static org.bbaemin.common.enums.ServicePath.PAYMENT_SERVICE;
 
 @Transactional(readOnly = true)
 @Service
 @RequiredArgsConstructor
 public class OrderService {
+
+    private String admin = "localhost:8080";
+    private String user = "localhost:8081";
 
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
@@ -46,8 +57,6 @@ public class OrderService {
 
     private final RestTemplate restTemplate;
 
-    private String admin = "localhost:8080";
-    private String user = "localhost:8081";
 
     public List<Order> getOrderListByUserId(Long userId) {
         User user = userService.getUser(userId);
@@ -150,132 +159,98 @@ public class OrderService {
 
         // #1. 장바구니 조회 (CartService와 분리되어 있다고 가정)
 //        List<CartItem> cartItemList = cartItemService.getCartItemListByUserId(userId);
-        CartResponse cart = this.getCart(userId).getBody().getResult();
+        ApiResult<CartResponse> getCartResponse = this.getCart(userId).getBody();
+        if (Objects.isNull(getCartResponse)) {
+            // TODO - 예외 처리
+            throw new RuntimeException();
+        }
+
+        CartResponse cart = getCartResponse.getResult();
         List<CartItemResponse> cartItemList = cart.getCartItemList();
 
         for (CartItemResponse cartItem : cartItemList) {
             // #2. 재고 조회 및 재고 차감 처리
             // -> 재고 부족 시 주문 불가 처리
-            ResponseEntity<ApiResult<ItemResponse>> responseEntity = this.deductItem(cartItem.getItemId(), cartItem.getOrderCount());
-            if (!responseEntity.getStatusCode().is2xxSuccessful()) {
-                // throw new OrderException(error);
+            ResponseEntity<ApiResult<ItemResponse>> deductItemResponse = this.deductItem(cartItem.getItemId(), cartItem.getOrderCount());
+            if (!deductItemResponse.getStatusCode().is2xxSuccessful()) {
+
                 this.sendEmail(order.getEmail(), "ORDER FAIL - ITEM FAIL");
+
+                // TODO - 예외 처리
+                throw new RuntimeException();
             }
         }
 
         // #3. 금액 조회
         // #3-1. 주문금액
-        Integer orderAmount = cartItemList.stream().mapToInt(cartItem -> cartItem.getOrderPrice() * cartItem.getOrderCount()).sum();
+        int orderAmount = cartItemList.stream().mapToInt(cartItem -> cartItem.getOrderPrice() * cartItem.getOrderCount()).sum();
 
         // #3-2. 배달비 조회
-        Integer deliveryFee = deliveryFeeService.getDeliveryFee(orderAmount);
+        int deliveryFee = deliveryFeeService.getDeliveryFee(orderAmount);
 
         // #3-3. 쿠폰 적용(할인금액 조회)
-        Integer totalDiscountAmount = this.applyCouponList(orderAmount, discountCouponIdList).getBody().getResult();
+        Integer totalDiscountAmount = 0;
+        ResponseEntity<ApiResult<Integer>> applyCouponListResponse = this.applyCouponList(orderAmount, discountCouponIdList);
+        if (applyCouponListResponse.getStatusCode().is2xxSuccessful()
+            && !Objects.isNull(applyCouponListResponse.getBody())) {
+            totalDiscountAmount = applyCouponListResponse.getBody().getResult();
+        }
 
-        // TODO - 어떻게 테스트 하나요?
-        List<OrderItem> orderItemList = cartItemList.stream()
-                .map(cartItem -> OrderItem.builder()
+        // #3-4. 총 금액
+        int paymentAmount = orderAmount + deliveryFee - totalDiscountAmount;
+
+        // #4. 결제 -> 결제 실패 시 주문 불가 처리
+        // TODO - 결제 데이터
+        ResponseEntity<ApiResult<PaymentResponse>> payResponse = this.pay(1L, paymentAmount, "referenceNumber", "account");
+        if (payResponse.getStatusCode().is2xxSuccessful()
+            && !Objects.isNull(payResponse.getBody())) {
+
+            // #5-1. (결제까지 완료 시) 주문 생성
+            PaymentResponse result = payResponse.getBody().getResult();
+            Long paymentId = result.getPaymentId();
+
+            order.setOrderAmount(orderAmount);
+            order.setDeliveryFee(deliveryFee);
+            order.setPaymentAmount(paymentAmount);
+            order.setUser(user);
+            order.setPaymentId(paymentId);
+            order.setStatus(COMPLETE_ORDER);
+            orderRepository.save(order);
+
+            cartItemList.forEach(cartItem -> {
+                OrderItem orderItem = OrderItem.builder()
+                        .order(order)
                         .item(cartItem.getItem())
                         .itemName(cartItem.getItemName())
                         .itemDescription(cartItem.getItemDescription())
                         .orderPrice(cartItem.getOrderPrice())
                         .orderCount(cartItem.getOrderCount())
-                        .build())
-                .collect(Collectors.toList());
-        order.setOrderAmount(orderAmount);
-        order.setDeliveryFee(deliveryFee);
+                        .build();
+//                order.addOrderItem(orderItem);
+                orderItem.setOrder(order);
+                orderItemRepository.save(orderItem);
+            });
 
-        int totalDiscountAmount = couponService.apply(orderAmount, discountCouponIdList);
-        order.setPaymentAmount(orderAmount + deliveryFee - totalDiscountAmount);
+            cartItemService.clear(userId);
 
-        Order saved = orderRepository.save(order);
-        orderItemList.forEach(orderItem -> {
-            orderItem.setOrder(saved);
-            orderItemRepository.save(orderItem);
-        });
+            // #6. 주문 성공 메일 전송
+            this.sendEmail(order.getEmail(), "ORDER SUCCESS");
 
-        cartItemService.clear(userId);
-        return saved;
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // #7. 배달 정보 전송
+            this.sendDeliveryInfo(order.getDeliveryAddress(), order.getOrderId());
 
+        } else {
 
-                .doOnComplete(() -> {
+            // #5-1. 주문 실패 메일 전송
+            this.sendEmail(order.getEmail(), "ORDER FAIL - PAYMENT FAIL");
+            order.setStatus(FAIL_ORDER);
+            orderRepository.save(order);
 
+            // TODO - 예외 처리
+            throw new RuntimeException();
+        }
 
-
-
-
-
-
-                    // #3-4. 총 금액
-                    orderAmount
-                            .zipWith(deliveryFee, Integer::sum)
-                            .zipWith(totalDiscountAmount, (sum, discount) -> sum - discount)
-                            .doOnSuccess(paymentAmount ->
-
-                                            // #4. 결제 -> 결제 실패 시 주문 불가 처리
-                                            // TODO - 결제 데이터
-                                            this.pay(1L, paymentAmount, "referenceNumber", "account")
-                                                    .doOnError(throwable -> {
-//                                                throw new OrderException(throwable);
-
-                                                        // # 5-1. 주문 실패 메일 전송
-                                                        this.sendEmail(order.getEmail(), "ORDER FAIL - PAYMENT FAIL");
-
-                                                        order.setStatus(FAIL_ORDER);
-                                                        orderRepository.save(order);
-                                                    })
-                                                    .doOnSuccess(result -> {
-
-                                                        Long paymentId = result.getResult().getPaymentId();
-
-                                                        // #5-1. (결제까지 완료 시) 주문 생성
-                                                        Mono.zip(Mono.just(order), orderAmount, deliveryFee, Mono.just(paymentAmount))
-                                                                .map(tuple -> {
-                                                                    Order o = tuple.getT1();
-                                                                    Integer _orderAmount = tuple.getT2();
-                                                                    Integer _deliveryFee = tuple.getT3();
-                                                                    Integer _paymentAmount = tuple.getT4();
-                                                                    o.setOrderAmount(_orderAmount);
-                                                                    o.setDeliveryFee(_deliveryFee);
-                                                                    o.setPaymentAmount(_paymentAmount);
-                                                                    return o;
-                                                                })
-                                                                .map(o -> {
-                                                                    o.setUserId(userId);
-                                                                    o.setPaymentId(paymentId);
-                                                                    o.setStatus(COMPLETE_ORDER);
-                                                                    return o;
-                                                                })
-                                                                .flatMap(orderRepository::save)
-                                                                .flatMapMany(o -> cartItemFlux.map(cartItem -> OrderItem.builder()
-                                                                        .orderId(o.getOrderId())
-                                                                        .itemId(cartItem.getItemId())
-                                                                        .itemName(cartItem.getItemName())
-                                                                        .itemDescription(cartItem.getItemDescription())
-                                                                        .orderPrice(cartItem.getOrderPrice())
-                                                                        .orderCount(cartItem.getOrderCount())
-                                                                        .build()))
-                                                                .doOnNext(orderItem -> {
-                                                                    order.addOrderItem(orderItem);
-                                                                    orderItemRepository.save(orderItem);
-                                                                })
-                                                                .doOnComplete(() -> {
-                                                                    cartItemService.clear(userId);
-                                                                })
-                                                                .then(
-                                                                        // # 6. 주문 성공 메일 전송
-                                                                        this.sendEmail(order.getEmail(), "ORDER SUCCESS")
-                                                                )
-                                                                .then(
-                                                                        // # 7. 배달 정보 전송
-                                                                        this.sendDeliveryInfo(order.getDeliveryAddress(), order.getOrderId())
-                                                                );
-                                                    })
-                            );
-                })
-                .then(Mono.just(order));
+        return order;
     }
 
     @Transactional
@@ -288,37 +263,25 @@ public class OrderService {
     @Transactional
     public Order cancelOrder(Long userId, Long orderId) {
         // TODO - vs updateStatusCancel
+
         Order order = getOrder(userId, orderId);
+
+        // #1. 재고 복구
+        List<OrderItem> orderItemList = order.getOrderItemList();
+        orderItemList.forEach(orderItem -> this.restoreItem(orderItem.getItemId(), orderItem.getOrderCount()));
+
+        // #2. 결제 취소
+        this.cancelPay(orderId);
+
+        // #3. '주문 취소'로 상태 변경
         order.setStatus(OrderStatus.CANCEL_ORDER);
+
+        // #4. 주문 취소 메일 전송
+        this.sendEmail(order.getEmail(), "ORDER CANCEL");
+
+        // #5. 배달 취소 정보 전송
+        this.sendDeliveryInfo(order.getDeliveryAddress(), order.getOrderId());
+
         return order;
-//////////////////////////////////////////////////////////////////////////////////////
-        return getOrder(userId, orderId)
-                .doOnSuccess(order -> {
-
-                    // #1. 재고 복구
-                    List<OrderItem> orderItemList = order.getOrderItemList();
-                    Flux.fromIterable(orderItemList)
-                            .doOnNext(orderItem -> {
-                                this.restoreItem(orderItem.getItemId(), orderItem.getOrderCount());
-                            });
-
-                    // #2. 결제 취소
-                    this.cancelPay(orderId);
-
-                })
-                .map(order -> {
-                    order.setStatus(OrderStatus.CANCEL_ORDER);
-                    return order;
-                })
-                // #3. '주문 취소'로 상태 변경
-                .flatMap(orderRepository::save)
-                .doOnSuccess(order -> {
-                    // # 4. 주문 취소 메일 전송
-                    this.sendEmail(order.getEmail(), "ORDER CANCEL");
-                })
-                .doOnSuccess(order -> {
-                    // # 5. 배달 취소 정보 전송
-                    this.sendDeliveryInfo(order.getDeliveryAddress(), order.getOrderId());
-                });
     }
 }

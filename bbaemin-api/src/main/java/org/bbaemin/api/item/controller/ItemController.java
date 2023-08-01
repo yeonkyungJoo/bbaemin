@@ -2,7 +2,7 @@ package org.bbaemin.api.item.controller;
 
 import lombok.RequiredArgsConstructor;
 import org.bbaemin.api.item.vo.Item;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.bbaemin.api.item.controller.request.CreateItemRequest;
 import org.bbaemin.api.item.controller.request.UpdateItemRequest;
 import org.bbaemin.api.item.controller.response.ItemResponse;

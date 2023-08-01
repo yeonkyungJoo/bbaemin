@@ -2,7 +2,7 @@ package org.bbaemin.api.store.controller;
 
 import lombok.RequiredArgsConstructor;
 import org.bbaemin.api.store.vo.Store;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.bbaemin.api.store.controller.request.CreateStoreRequest;
 import org.bbaemin.api.store.controller.request.UpdateStoreRequest;
 import org.bbaemin.api.store.controller.response.StoreResponse;

@@ -5,7 +5,7 @@ import org.bbaemin.api.user.controller.request.UpdateUserInfoRequest;
 import org.bbaemin.api.user.controller.response.UserResponse;
 import org.bbaemin.api.user.service.UserService;
 import org.bbaemin.api.user.vo.User;
-import org.bbaemin.config.response.ApiResult;
+import org.bbaemin.common.response.ApiResult;
 import org.bbaemin.api.user.controller.request.JoinRequest;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
